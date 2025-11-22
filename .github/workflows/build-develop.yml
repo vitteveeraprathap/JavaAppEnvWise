@@ -19,7 +19,6 @@ jobs:
       - name: Generate Version (develop-YYYYMMDD.X)
         id: version
         run: |
-          # Note: github.run_number is expanded by GitHub Actions into the run counter
           TODAY=$(date +%Y%m%d)
           RUN_NO=${{ github.run_number }}
           VERSION="develop-${TODAY}.${RUN_NO}"
@@ -81,5 +80,6 @@ jobs:
 
       - name: Show produced image tag
         run: |
-          echo "Image pushed: ${{ env.UAT_IMAGE:-$UAT_IMAGE}}"
-          echo "Image tag: ${{ env.UAT_IMAGE_TAG:-${{ steps.version.outputs.version }}}}"
+          # Use shell env variables (exported earlier via GITHUB_ENV)
+          echo "Image pushed: $UAT_IMAGE"
+          echo "Image tag: $UAT_IMAGE_TAG"
