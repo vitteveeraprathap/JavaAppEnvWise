@@ -19,22 +19,49 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Extract Version (safe tag)
+      - name: Generate Version (develop-YYYYMMDD.X)
         id: version
         run: |
-          # Remove 'refs/heads/' safely and convert any '/' to '-' for a valid docker tag
-          BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          SAFE_BRANCH=${BRANCH_NAME//\//-}        # replace slashes with dashes
-          SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+          TODAY=$(date +%Y%m%d)
+          RUN_NO=${{ github.run_number }}
+          VERSION="develop-${TODAY}.${RUN_NO}"
+          LATEST_TAG="develop-latest"
 
-          # IMAGE_TAG example: release-1.2-abcdef0  or release-a37d568-abcdef0
-          IMAGE_TAG="${SAFE_BRANCH}-${SHORT_SHA}"
-          RELEASE_VERSION="${SAFE_BRANCH}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "Generated VERSION=${VERSION}  LATEST_TAG=${LATEST_TAG}"
 
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "release_version=${RELEASE_VERSION}" >> $GITHUB_OUTPUT
-          echo "branch=${BRANCH_NAME}" >> $GITHUB_OUTPUT
-          echo "safe_branch=${SAFE_BRANCH}" >> $GITHUB_OUTPUT
+      - name: Determine label (e.g. se-4567) & SHORT SHA
+        id: meta
+        run: |
+          # try to extract a label like se-4567 from branch name first, then commit message
+          BRANCH="${GITHUB_REF##*/}" || true
+          LABEL=$(echo "$BRANCH" | grep -oEi 'se-[0-9]+' || true)
+
+          if [ -z "$LABEL" ]; then
+            COMMIT_MSG=$(git log -1 --pretty=%B || true)
+            LABEL=$(echo "$COMMIT_MSG" | grep -oEi 'se-[0-9]+' || true)
+          fi
+
+          if [ -z "$LABEL" ]; then
+            LABEL="unknown"
+          fi
+
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+
+          echo "label=${LABEL}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B clean package -DskipTests
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -53,53 +80,61 @@ jobs:
           username: ${{ secrets.PROD_ACR_USERNAME }}
           password: ${{ secrets.PROD_ACR_PASSWORD }}
 
-      - name: Build & Push to PROD Registry (safe tags)
+      - name: Build & Push to PRD Registry (prd-<label>-<sha> + develop version)
         run: |
-          PROD_REG="${{ secrets.PROD_ACR_LOGIN_SERVER }}"
+          PRD_REG="${{ secrets.PRD_ACR_LOGIN_SERVER }}"
           IMAGE="${{ env.IMAGE_NAME }}"
 
-          IMAGE_TAG="${{ steps.version.outputs.image_tag }}"
-          RELEASE_VERSION="${{ steps.version.outputs.release_version }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          LATEST_TAG="${{ steps.version.outputs.latest_tag }}"
+          LABEL="${{ steps.meta.outputs.label }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
 
-          FULL_IMAGE="${PROD_REG}/${IMAGE}:${IMAGE_TAG}"
-          RELEASE_IMAGE="${PROD_REG}/${IMAGE}:${RELEASE_VERSION}"
+          # Compose tags
+          PRD_TAG="prd-${LABEL}-${SHORT_SHA}"           # e.g. prd-se-4567-a95a502
+          IMAGE_PRD="${PRD_REG}/${IMAGE}:${PRD_TAG}"
+          IMAGE_VERSION="${PRD_REG}/${IMAGE}:${VERSION}"
+          IMAGE_LATEST="${PRD_REG}/${IMAGE}:${LATEST_TAG}"
 
-          echo "Building image: $FULL_IMAGE"
-          docker build -t "$FULL_IMAGE" .
+          echo "Building image: $IMAGE_PRD"
+          docker build -t "$IMAGE_PRD" .
 
-          echo "Pushing image: $FULL_IMAGE"
-          docker push "$FULL_IMAGE"
+          echo "Pushing image (PRD tag): $IMAGE_PRD"
+          docker push "$IMAGE_PRD"
 
-          # Also push the release-version tag (branch name)
-          docker tag "$FULL_IMAGE" "$RELEASE_IMAGE"
-          docker push "$RELEASE_IMAGE"
+          # Also tag & push develop version + latest pointer
+          docker tag "$IMAGE_PRD" "$IMAGE_VERSION"
+          docker push "$IMAGE_VERSION"
 
-          # Export for the summary step
-          echo "PROD_REG=${PROD_REG}" >> $GITHUB_ENV
-          echo "PROD_IMAGE=${IMAGE}:${IMAGE_TAG}" >> $GITHUB_ENV
-          echo "PROD_IMAGE_FULL=${FULL_IMAGE}" >> $GITHUB_ENV
-          echo "PROD_IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          docker tag "$IMAGE_PRD" "$IMAGE_LATEST"
+          docker push "$IMAGE_LATEST"
 
-      - name: Write PROD-style Build Summary 
+          # Expose env for summary step
+          echo "PRD_REG=${PRD_REG}" >> $GITHUB_ENV
+          echo "PRD_IMAGE=${IMAGE}:${PRD_TAG}" >> $GITHUB_ENV
+          echo "PRD_IMAGE_FULL=${IMAGE_PRD}" >> $GITHUB_ENV
+          echo "PRD_VERSION_TAG=${VERSION}" >> $GITHUB_ENV
+
+      - name: Write PRD-style Build Summary (no JIRA ID line)
         run: |
-          # mask registry in summary as requested
-          REG_DISPLAY="***"
+          # If you prefer to hide the registry, set REG_DISPLAY="***"
+          REG="${{ secrets.PRD_ACR_LOGIN_SERVER }}"
+          REG_DISPLAY="${REG}"   # change to '***' if you want to mask it
 
-          # Use envs exported earlier (PROD_IMAGE / PROD_IMAGE_TAG)
-          IMAGE_DISPLAY="${PROD_IMAGE}"      # e.g. web-app:release-1.2-abcdef0
-          VERSION_TAG="${PROD_IMAGE_TAG}"    # e.g. release-1.2-abcdef0
+          # Use envs exported earlier
+          IMAGE_DISPLAY="${{ env.PRD_IMAGE }}"      # e.g. web-app:prd-se-4567-a95a502
+          VERSION_TAG="${{ env.PRD_VERSION_TAG }}"  # e.g. develop-20251122.5
 
-          # Write the exact format (including blank line spacing)
-          cat >> $GITHUB_STEP_SUMMARY <<EOF
-          PROD Image Built Successfully!
-
-          Registry: ${REG_DISPLAY}
-          Image: ${IMAGE_DISPLAY}
-
-          Next Step: Go to Actions → Deploy to PROD → Run workflow with tag: ${VERSION_TAG}
-          EOF
+          {
+            echo "PRD Image Built Successfully!"
+            echo ""
+            echo "Registry: ${REG_DISPLAY}"
+            echo "Image: ${IMAGE_DISPLAY}"
+            echo ""
+            echo "Next Step: Go to Actions → Deploy to PRD → Run workflow with tag: ${VERSION_TAG}"
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Final log (CI)
         run: |
-          echo "=== PROD Summary ==="
+          echo "=== PRD Summary ==="
           cat $GITHUB_STEP_SUMMARY || true
