@@ -28,14 +28,14 @@ jobs:
       continue-on-error: true
       run: |
         az container delete \
-          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_UAT }} \
           --name ${{ secrets.UAT_CONTAINER_NAME }} \
           --yes
 
     - name: Deploy to UAT
       run: |
         az container create \
-          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_UAT }} \
           --name ${{ secrets.UAT_CONTAINER_NAME }} \
           --image ${{ secrets.UAT_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
           --registry-login-server ${{ secrets.UAT_ACR_LOGIN_SERVER }} \
@@ -44,6 +44,7 @@ jobs:
           --dns-name-label ${{ secrets.UAT_DNS_LABEL }} \
           --ports 8080 \
           --protocol TCP \
+          --os-type Linux \
           --cpu 1 \
           --memory 1.5 \
           --location westus2 \
@@ -55,13 +56,13 @@ jobs:
     - name: Get URL
       run: |
         FQDN=$(az container show \
-          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_UAT }} \
           --name ${{ secrets.UAT_CONTAINER_NAME }} \
           --query ipAddress.fqdn \
           --output tsv)
         
         IP=$(az container show \
-          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_UAT }} \
           --name ${{ secrets.UAT_CONTAINER_NAME }} \
           --query ipAddress.ip \
           --output tsv)
