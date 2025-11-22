@@ -1,0 +1,88 @@
+name: Deploy to PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Release version to deploy (e.g., v1.0.0)'
+        required: true
+        type: string
+      confirmation:
+        description: 'Type "DEPLOY-TO-PROD" to confirm'
+        required: true
+        type: string
+
+env:
+  IMAGE_NAME: web-app
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Validate Confirmation
+      run: |
+        if [ "${{ inputs.confirmation }}" != "DEPLOY-TO-PROD" ]; then
+          echo "❌ Confirmation failed"
+          exit 1
+        fi
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+    
+    steps:
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS_PROD }}
+
+    - name: Delete existing container
+      continue-on-error: true
+      run: |
+        az container delete \
+          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --name ${{ secrets.PROD_CONTAINER_NAME }} \
+          --yes
+
+    - name: Deploy to PROD
+      run: |
+        az container create \
+          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --name ${{ secrets.PROD_CONTAINER_NAME }} \
+          --image ${{ secrets.PROD_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
+          --registry-login-server ${{ secrets.PROD_ACR_LOGIN_SERVER }} \
+          --registry-username ${{ secrets.PROD_ACR_USERNAME }} \
+          --registry-password ${{ secrets.PROD_ACR_PASSWORD }} \
+          --dns-name-label ${{ secrets.PROD_DNS_LABEL }} \
+          --ports 8080 \
+          --protocol TCP \
+          --cpu 2 \
+          --memory 2 \
+          --location westus2 \
+          --environment-variables \
+            'SPRING_PROFILES_ACTIVE'='prod' \
+            'SERVER_PORT'='8080' \
+          --restart-policy Always
+
+    - name: Get URL
+      run: |
+        FQDN=$(az container show \
+          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --name ${{ secrets.PROD_CONTAINER_NAME }} \
+          --query ipAddress.fqdn \
+          --output tsv)
+        
+        IP=$(az container show \
+          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --name ${{ secrets.PROD_CONTAINER_NAME }} \
+          --query ipAddress.ip \
+          --output tsv)
+        
+        echo "### ✅ Deployed to PRODUCTION!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** PRODUCTION" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ inputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**FQDN:** http://${FQDN}:8080" >> $GITHUB_STEP_SUMMARY
+        echo "**IP:** http://${IP}:8080" >> $GITHUB_STEP_SUMMARY

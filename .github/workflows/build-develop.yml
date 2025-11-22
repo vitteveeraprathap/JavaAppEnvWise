@@ -1,0 +1,86 @@
+name: Build from Develop
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: web-app
+
+jobs:
+  build-dev:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Generate Version
+      id: version
+      run: |
+        SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        VERSION="develop-${TIMESTAMP}-${SHORT_SHA}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Build with Maven
+      run: mvn clean package -DskipTests
+
+    - name: Log in to DEV Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.DEV_ACR_LOGIN_SERVER }}
+        username: ${{ secrets.DEV_ACR_USERNAME }}
+        password: ${{ secrets.DEV_ACR_PASSWORD }}
+
+    - name: Build and Push to DEV Registry
+      run: |
+        IMAGE_TAG="${{ steps.version.outputs.version }}"
+        FULL_IMAGE="${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+        
+        docker build -t $FULL_IMAGE .
+        docker push $FULL_IMAGE
+        
+        docker tag $FULL_IMAGE ${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:develop-latest
+        docker push ${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:develop-latest
+        
+        echo "DEV_IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+
+    - name: Log in to UAT Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.UAT_ACR_LOGIN_SERVER }}
+        username: ${{ secrets.UAT_ACR_USERNAME }}
+        password: ${{ secrets.UAT_ACR_PASSWORD }}
+
+    - name: Push to UAT Registry
+      run: |
+        IMAGE_TAG="${{ steps.version.outputs.version }}"
+        DEV_IMAGE="${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+        UAT_IMAGE="${{ secrets.UAT_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+        
+        docker tag $DEV_IMAGE $UAT_IMAGE
+        docker push $UAT_IMAGE
+        
+        docker tag $UAT_IMAGE ${{ secrets.UAT_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:develop-latest
+        docker push ${{ secrets.UAT_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:develop-latest
+        
+        echo "### ✅ Develop Image Built Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Image Tag:** \`${IMAGE_TAG}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Pushed to:**" >> $GITHUB_STEP_SUMMARY
+        echo "- DEV Registry: ${{ secrets.DEV_ACR_LOGIN_SERVER }}" >> $GITHUB_STEP_SUMMARY
+        echo "- UAT Registry: ${{ secrets.UAT_ACR_LOGIN_SERVER }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Deploy Options:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Deploy to DEV: Use tag \`${IMAGE_TAG}\` or \`develop-latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Deploy to UAT: Use tag \`${IMAGE_TAG}\` or \`develop-latest\`" >> $GITHUB_STEP_SUMMARY
