@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Generate Version (develop-YYYYMMDD.X)
         id: version
@@ -27,6 +29,28 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
           echo "Generated VERSION=${VERSION}  LATEST_TAG=${LATEST_TAG}"
+
+      - name: Determine label (e.g. se-4567) & SHORT SHA
+        id: meta
+        run: |
+          # try to extract a label like se-4567 from branch name first, then commit message
+          BRANCH="${GITHUB_REF##*/}" || true
+          LABEL=$(echo "$BRANCH" | grep -oEi 'se-[0-9]+' || true)
+
+          if [ -z "$LABEL" ]; then
+            COMMIT_MSG=$(git log -1 --pretty=%B || true)
+            LABEL=$(echo "$COMMIT_MSG" | grep -oEi 'se-[0-9]+' || true)
+          fi
+
+          if [ -z "$LABEL" ]; then
+            LABEL="unknown"
+          fi
+
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+
+          echo "label=${LABEL}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -45,41 +69,61 @@ jobs:
           username: ${{ secrets.UAT_ACR_USERNAME }}
           password: ${{ secrets.UAT_ACR_PASSWORD }}
 
-      - name: Build & Push to UAT Registry
+      - name: Build & Push to UAT Registry (uat-<label>-<sha> + develop version)
         run: |
           UAT_REG="${{ secrets.UAT_ACR_LOGIN_SERVER }}"
           IMAGE="${{ env.IMAGE_NAME }}"
 
           VERSION="${{ steps.version.outputs.version }}"
           LATEST_TAG="${{ steps.version.outputs.latest_tag }}"
+          LABEL="${{ steps.meta.outputs.label }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
 
-          FULL_IMAGE="${UAT_REG}/${IMAGE}:${VERSION}"
-          LATEST_IMAGE="${UAT_REG}/${IMAGE}:${LATEST_TAG}"
+          # Compose tags
+          UAT_TAG="uat-${LABEL}-${SHORT_SHA}"           # e.g. uat-se-4567-a95a502
+          IMAGE_UAT="${UAT_REG}/${IMAGE}:${UAT_TAG}"
+          IMAGE_VERSION="${UAT_REG}/${IMAGE}:${VERSION}"
+          IMAGE_LATEST="${UAT_REG}/${IMAGE}:${LATEST_TAG}"
 
-          echo "Building image: $FULL_IMAGE"
-          docker build -t "$FULL_IMAGE" .
+          echo "Building image: $IMAGE_UAT"
+          docker build -t "$IMAGE_UAT" .
 
-          echo "Pushing image: $FULL_IMAGE"
-          docker push "$FULL_IMAGE"
+          echo "Pushing image (UAT tag): $IMAGE_UAT"
+          docker push "$IMAGE_UAT"
 
-          echo "Tagging and pushing latest pointer: $LATEST_IMAGE"
-          docker tag "$FULL_IMAGE" "$LATEST_IMAGE"
-          docker push "$LATEST_IMAGE"
+          # Also tag & push develop version + latest pointer
+          docker tag "$IMAGE_UAT" "$IMAGE_VERSION"
+          docker push "$IMAGE_VERSION"
 
-          # Expose env for downstream steps (if any)
-          echo "UAT_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
-          echo "UAT_IMAGE_TAG=${VERSION}" >> $GITHUB_ENV
+          docker tag "$IMAGE_UAT" "$IMAGE_LATEST"
+          docker push "$IMAGE_LATEST"
 
-          # Add human-friendly step summary
-          echo "### ✅ Develop Image Built & Pushed to UAT" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version Tag:** \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Latest Tag:** \`${LATEST_TAG}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Pushed to:** $UAT_REG" >> $GITHUB_STEP_SUMMARY
+          # Expose env for summary step
+          echo "UAT_REG=${UAT_REG}" >> $GITHUB_ENV
+          echo "UAT_IMAGE=${IMAGE}:${UAT_TAG}" >> $GITHUB_ENV
+          echo "UAT_IMAGE_FULL=${IMAGE_UAT}" >> $GITHUB_ENV
+          echo "UAT_VERSION_TAG=${VERSION}" >> $GITHUB_ENV
 
-      - name: Show produced image tag
+      - name: Write UAT-style Build Summary (no JIRA ID line)
         run: |
-          # Use shell env variables (exported earlier via GITHUB_ENV)
-          echo "Image pushed: $UAT_IMAGE"
-          echo "Image tag: $UAT_IMAGE_TAG"
+          # If you prefer to hide the registry, set REG_DISPLAY="***"
+          REG="${{ secrets.UAT_ACR_LOGIN_SERVER }}"
+          REG_DISPLAY="${REG}"   # change to '***' if you want to mask it
+
+          # Use envs exported earlier
+          IMAGE_DISPLAY="${{ env.UAT_IMAGE }}"      # e.g. web-app:uat-se-4567-a95a502
+          VERSION_TAG="${{ env.UAT_VERSION_TAG }}"  # e.g. develop-20251122.5
+
+          {
+            echo "UAT Image Built Successfully!"
+            echo ""
+            echo "Registry: ${REG_DISPLAY}"
+            echo "Image: ${IMAGE_DISPLAY}"
+            echo ""
+            echo "Next Step: Go to Actions → Deploy to UAT → Run workflow with tag: ${VERSION_TAG}"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Final log (CI)
+        run: |
+          echo "=== UAT Summary ==="
+          cat $GITHUB_STEP_SUMMARY || true
