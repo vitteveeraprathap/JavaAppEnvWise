@@ -3,7 +3,7 @@ name: Build Release (PROD)
 on:
   push:
     branches:
-      - 'release'
+      - 'release'        # change to 'release/*' if you want any release/* branch
   workflow_dispatch:
 
 env:
@@ -80,28 +80,26 @@ jobs:
           echo "PROD_IMAGE_FULL=${FULL_IMAGE}" >> $GITHUB_ENV
           echo "PROD_IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
-      - name: Write PRD-style Build Summary 
+      - name: Write PROD-style Build Summary 
         run: |
-          # If you prefer to hide the registry, set REG_DISPLAY="***"
-          REG="${{ secrets.PRD_ACR_LOGIN_SERVER }}"
-          REG_DISPLAY="${REG}"   # change to '***' if you want to mask it
+          # mask registry in summary as requested
+          REG_DISPLAY="***"
 
-          # Use envs exported earlier
-          IMAGE_DISPLAY="${{ env.PRD_IMAGE }}"      # e.g. web-app:uat-se-4567-a95a502
-          VERSION_TAG="${{ env.PRD_VERSION_TAG }}"  # e.g. develop-20251122.5
+          # Use envs exported earlier (PROD_IMAGE / PROD_IMAGE_TAG)
+          IMAGE_DISPLAY="${PROD_IMAGE}"      # e.g. web-app:release-1.2-abcdef0
+          VERSION_TAG="${PROD_IMAGE_TAG}"    # e.g. release-1.2-abcdef0
 
-          {
-            echo "PRD Image Built Successfully!"
-            echo ""
-            echo "Registry: ${REG_DISPLAY}"
-            echo "Image: ${IMAGE_DISPLAY}"
-            echo ""
-            echo "Next Step: Go to Actions → Deploy to PRD → Run workflow with tag: ${VERSION_TAG}"
-          } >> $GITHUB_STEP_SUMMARY
+          # Write the exact format (including blank line spacing)
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          PROD Image Built Successfully!
+
+          Registry: ${REG_DISPLAY}
+          Image: ${IMAGE_DISPLAY}
+
+          Next Step: Go to Actions → Deploy to PROD → Run workflow with tag: ${VERSION_TAG}
+          EOF
 
       - name: Final log (CI)
         run: |
-          echo "=== PRD Summary ==="
+          echo "=== PROD Summary ==="
           cat $GITHUB_STEP_SUMMARY || true
-
-      
