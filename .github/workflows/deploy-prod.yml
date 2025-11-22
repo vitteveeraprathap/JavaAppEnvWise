@@ -42,14 +42,14 @@ jobs:
       continue-on-error: true
       run: |
         az container delete \
-          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_PRD }} \
           --name ${{ secrets.PROD_CONTAINER_NAME }} \
           --yes
 
-    - name: Deploy to PROD
+    - name: Deploy to PRODUCTION
       run: |
         az container create \
-          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_PRD }} \
           --name ${{ secrets.PROD_CONTAINER_NAME }} \
           --image ${{ secrets.PROD_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
           --registry-login-server ${{ secrets.PROD_ACR_LOGIN_SERVER }} \
@@ -58,6 +58,7 @@ jobs:
           --dns-name-label ${{ secrets.PROD_DNS_LABEL }} \
           --ports 8080 \
           --protocol TCP \
+          --os-type Linux \
           --cpu 2 \
           --memory 2 \
           --location westus2 \
@@ -69,13 +70,13 @@ jobs:
     - name: Get URL
       run: |
         FQDN=$(az container show \
-          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_PRD }} \
           --name ${{ secrets.PROD_CONTAINER_NAME }} \
           --query ipAddress.fqdn \
           --output tsv)
         
         IP=$(az container show \
-          --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+          --resource-group ${{ secrets.RESOURCE_GROUP_PRD }} \
           --name ${{ secrets.PROD_CONTAINER_NAME }} \
           --query ipAddress.ip \
           --output tsv)
