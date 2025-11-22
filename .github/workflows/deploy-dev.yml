@@ -1,0 +1,79 @@
+name: Deploy to DEV
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy'
+        required: true
+        type: string
+        default: 'develop-latest'
+
+env:
+  IMAGE_NAME: web-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: dev
+    
+    steps:
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS_DEV }}
+
+    - name: Delete existing container
+      continue-on-error: true
+      run: |
+        az container delete \
+          --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
+          --name ${{ secrets.DEV_CONTAINER_NAME }} \
+          --yes
+
+    - name: Deploy to DEV
+      run: |
+        az container create \
+          --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
+          --name ${{ secrets.DEV_CONTAINER_NAME }} \
+          --image ${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
+          --registry-login-server ${{ secrets.DEV_ACR_LOGIN_SERVER }} \
+          --registry-username ${{ secrets.DEV_ACR_USERNAME }} \
+          --registry-password ${{ secrets.DEV_ACR_PASSWORD }} \
+          --dns-name-label ${{ secrets.DEV_DNS_LABEL }} \
+          --ports 8080 \
+          --protocol TCP \
+          --cpu 1 \
+          --memory 1.5 \
+          --location westus2 \
+          --environment-variables \
+            'SPRING_PROFILES_ACTIVE'='dev' \
+            'SERVER_PORT'='8080' \
+          --restart-policy OnFailure
+
+    - name: Get URL
+      run: |
+        FQDN=$(az container show \
+          --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
+          --name ${{ secrets.DEV_CONTAINER_NAME }} \
+          --query ipAddress.fqdn \
+          --output tsv)
+        
+        IP=$(az container show \
+          --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
+          --name ${{ secrets.DEV_CONTAINER_NAME }} \
+          --query ipAddress.ip \
+          --output tsv)
+        
+        echo "### ✅ Deployed to DEV!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** DEV" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ inputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**FQDN:** http://${FQDN}:8080" >> $GITHUB_STEP_SUMMARY
+        echo "**IP:** http://${IP}:8080" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Test URLs:**" >> $GITHUB_STEP_SUMMARY
+        echo "- http://${IP}:8080/" >> $GITHUB_STEP_SUMMARY
+        echo "- http://${IP}:8080/health" >> $GITHUB_STEP_SUMMARY
+        echo "- http://${IP}:8080/info" >> $GITHUB_STEP_SUMMARY
