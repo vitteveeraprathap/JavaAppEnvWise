@@ -19,13 +19,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Generate Version (develop-YYYYMMDD.X)
+      - name: Generate Version (release-YYYYMMDD.X)
         id: version
         run: |
           TODAY=$(date +%Y%m%d)
           RUN_NO=${{ github.run_number }}
-          VERSION="develop-${TODAY}.${RUN_NO}"
-          LATEST_TAG="develop-latest"
+          VERSION="release-${TODAY}.${RUN_NO}"
+          LATEST_TAG="release-latest"
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
@@ -80,7 +80,7 @@ jobs:
           username: ${{ secrets.PROD_ACR_USERNAME }}
           password: ${{ secrets.PROD_ACR_PASSWORD }}
 
-      - name: Build & Push to PROD Registry (prod-<label>-<sha> + develop version)
+      - name: Build & Push to PROD Registry (prod-<label>-<sha> + release version)
         run: |
           PROD_REG="${{ secrets.PROD_ACR_LOGIN_SERVER }}"
           IMAGE="${{ env.IMAGE_NAME }}"
@@ -102,7 +102,7 @@ jobs:
           echo "Pushing image (PROD tag): $IMAGE_PROD"
           docker push "$IMAGE_PROD"
 
-          # Also tag & push develop version + latest pointer
+          # Also tag & push release version + latest pointer
           docker tag "$IMAGE_PROD" "$IMAGE_VERSION"
           docker push "$IMAGE_VERSION"
 
@@ -123,7 +123,7 @@ jobs:
 
           # Use envs exported earlier
           IMAGE_DISPLAY="${{ env.PROD_IMAGE }}"      # e.g. web-app:prod-se-4567-a95a502
-          VERSION_TAG="${{ env.PROD_VERSION_TAG }}"  # e.g. develop-20251122.5
+          VERSION_TAG="${{ env.PROD_VERSION_TAG }}"  # e.g. release-20251122.5
 
           {
             echo "PROD Image Built Successfully!"
