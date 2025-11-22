@@ -1,0 +1,74 @@
+name: Deploy to UAT
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy'
+        required: true
+        type: string
+        default: 'develop-latest'
+
+env:
+  IMAGE_NAME: web-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: uat
+    
+    steps:
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS_UAT }}
+
+    - name: Delete existing container
+      continue-on-error: true
+      run: |
+        az container delete \
+          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --name ${{ secrets.UAT_CONTAINER_NAME }} \
+          --yes
+
+    - name: Deploy to UAT
+      run: |
+        az container create \
+          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --name ${{ secrets.UAT_CONTAINER_NAME }} \
+          --image ${{ secrets.UAT_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
+          --registry-login-server ${{ secrets.UAT_ACR_LOGIN_SERVER }} \
+          --registry-username ${{ secrets.UAT_ACR_USERNAME }} \
+          --registry-password ${{ secrets.UAT_ACR_PASSWORD }} \
+          --dns-name-label ${{ secrets.UAT_DNS_LABEL }} \
+          --ports 8080 \
+          --protocol TCP \
+          --cpu 1 \
+          --memory 1.5 \
+          --location westus2 \
+          --environment-variables \
+            'SPRING_PROFILES_ACTIVE'='uat' \
+            'SERVER_PORT'='8080' \
+          --restart-policy OnFailure
+
+    - name: Get URL
+      run: |
+        FQDN=$(az container show \
+          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --name ${{ secrets.UAT_CONTAINER_NAME }} \
+          --query ipAddress.fqdn \
+          --output tsv)
+        
+        IP=$(az container show \
+          --resource-group ${{ secrets.UAT_RESOURCE_GROUP }} \
+          --name ${{ secrets.UAT_CONTAINER_NAME }} \
+          --query ipAddress.ip \
+          --output tsv)
+        
+        echo "### ✅ Deployed to UAT!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** UAT" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ inputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**FQDN:** http://${FQDN}:8080" >> $GITHUB_STEP_SUMMARY
+        echo "**IP:** http://${IP}:8080" >> $GITHUB_STEP_SUMMARY
