@@ -44,6 +44,7 @@ jobs:
           --dns-name-label ${{ secrets.DEV_DNS_LABEL }} \
           --ports 8080 \
           --protocol TCP \
+          --os-type Linux \
           --cpu 1 \
           --memory 1.5 \
           --location westus2 \
