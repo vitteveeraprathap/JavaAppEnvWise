@@ -6,6 +6,10 @@ on:
       - 'feature/se-*'
   workflow_dispatch:
 
+# Needed so the workflow can create & push git tags
+permissions:
+  contents: write
+
 env:
   IMAGE_NAME: web-app
 
@@ -17,23 +21,36 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0   # IMPORTANT: required to read previous tags
+        # IMPORTANT: fetch full history so we can see existing tags
+        fetch-depth: 0
 
-    - name: Get next version tag
+    - name: Get next version tag (v1, v2, v3, ...)
       id: version
       run: |
-        # Get the latest tag (v1, v2, v3...)
-        LATEST_TAG=$(git tag --sort=-v:refname | head -n 1)
+        # Get the latest tag sorted by version (v1, v2, v10...)
+        LATEST_TAG=$(git tag --sort=-v:refname | head -n 1 || echo "")
+
+        echo "Latest tag: '$LATEST_TAG'"
 
         if [[ -z "$LATEST_TAG" ]]; then
+          # No tags yet -> start with v1
           NEXT_TAG="v1"
         else
+          # Strip the leading 'v' and increment
           NUMBER=${LATEST_TAG#v}
-          NEXT_NUMBER=$((NUMBER + 1))
-          NEXT_TAG="v${NEXT_NUMBER}"
+
+          # If latest tag is not like v[number], reset to v1
+          if ! [[ "$NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Latest tag '$LATEST_TAG' is not numeric (vN). Defaulting to v1."
+            NEXT_TAG="v1"
+          else
+            NEXT_NUMBER=$((NUMBER + 1))
+            NEXT_TAG="v${NEXT_NUMBER}"
+          fi
         fi
 
-        echo "next_tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+        echo "Next tag: $NEXT_TAG"
+        echo "next_tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -57,20 +74,30 @@ jobs:
         IMAGE_TAG="${{ steps.version.outputs.next_tag }}"
         FULL_IMAGE="${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
 
-        docker build -t $FULL_IMAGE .
-        docker push $FULL_IMAGE
+        echo "Building image: $FULL_IMAGE"
 
-    - name: Create git tag for next version
-      if: ${{ github.ref_type == 'branch' }}
+        docker build -t "$FULL_IMAGE" .
+        docker push "$FULL_IMAGE"
+
+        echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+
+    - name: Create git tag for this build
       run: |
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
 
         TAG="${{ steps.version.outputs.next_tag }}"
-        git tag $TAG
-        git push origin $TAG
+
+        echo "Creating tag: $TAG"
+        git tag "$TAG"
+        git push origin "$TAG"
 
     - name: Summary
       run: |
         echo "### 🚀 DEV Image Built" >> $GITHUB_STEP_SUMMARY
-        echo "**Tag:** ${{ steps.version.outputs.next_tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Registry:** \`${{ secrets.DEV_ACR_LOGIN_SERVER }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Tag created:** \`${{ steps.version.outputs.next_tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Step:** Use tag \`${{ steps.version.outputs.next_tag }}\` in your deploy workflow." >> $GITHUB_STEP_SUMMARY
