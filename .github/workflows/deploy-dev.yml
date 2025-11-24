@@ -1,80 +1,79 @@
-name: Deploy to DEV
+name: Deploy to Container App
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Image tag to deploy'
-        required: true
+        description: "Image tag to deploy (v1, v2, v3...)"
         type: string
-        default: 'develop-latest'
+        required: true
+      environment:
+        description: "Environment to deploy"
+        type: choice
+        default: dev
+        options:
+          - dev
+          - uat
+          - prod
 
-env:
-  IMAGE_NAME: web-app
+permissions:
+  id-token: write        # Required for OIDC login
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: 
-      name: dev
-    
+
+    env:
+      IMAGE_NAME: web-app
+
     steps:
-    - name: Azure Login
-      uses: azure/login@v1
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Azure Login (OIDC)
+      uses: azure/login@v2
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS_DEV }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Delete existing container
-      continue-on-error: true
+    - name: Select ENV values
+      id: conf
       run: |
-        az container delete \
-          --resource-group ${{ secrets.RESOURCE_GROUP_DEV }} \
-          --name ${{ secrets.DEV_CONTAINER_NAME }} \
-          --yes
+        if [[ "${{ github.event.inputs.environment }}" == "dev" ]]; then
+          echo "acr=${{ secrets.DEV_ACR_LOGIN_SERVER }}" >> $GITHUB_OUTPUT
+          echo "rg=${{ secrets.RESOURCE_GROUP_DEV }}" >> $GITHUB_OUTPUT
+          echo "app=${{ secrets.DEV_CONTAINER_APP }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event.inputs.environment }}" == "uat" ]]; then
+          echo "acr=${{ secrets.UAT_ACR_LOGIN_SERVER }}" >> $GITHUB_OUTPUT
+          echo "rg=${{ secrets.UAT_RG }}" >> $GITHUB_OUTPUT
+          echo "app=${{ secrets.UAT_CONTAINER_APP }}" >> $GITHUB_OUTPUT
+        else
+          echo "acr=${{ secrets.PRD_ACR_LOGIN_SERVER }}" >> $GITHUB_OUTPUT
+          echo "rg=${{ secrets.PRD_RG }}" >> $GITHUB_OUTPUT
+          echo "app=${{ secrets.PRD_CONTAINER_APP }}" >> $GITHUB_OUTPUT
+        fi
 
-    - name: Deploy to DEV
+    - name: Deploy to Azure Container App
       run: |
-        az container create \
-          --resource-group ${{ secrets.RESOURCE_GROUP_DEV }} \
-          --name ${{ secrets.DEV_CONTAINER_NAME }} \
-          --image ${{ secrets.DEV_ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }} \
-          --registry-login-server ${{ secrets.DEV_ACR_LOGIN_SERVER }} \
-          --registry-username ${{ secrets.DEV_ACR_USERNAME }} \
-          --registry-password ${{ secrets.DEV_ACR_PASSWORD }} \
-          --dns-name-label ${{ secrets.DEV_DNS_LABEL }} \
-          --ports 8080 \
-          --protocol TCP \
-          --os-type Linux \
-          --cpu 1 \
-          --memory 1.5 \
-          --location westus2 \
-          --environment-variables \
-            'SPRING_PROFILES_ACTIVE'='dev' \
-            'SERVER_PORT'='8080' \
-          --restart-policy OnFailure
+        TAG="${{ github.event.inputs.image_tag }}"
+        ACR="${{ steps.conf.outputs.acr }}"
+        RG="${{ steps.conf.outputs.rg }}"
+        APP_NAME="${{ steps.conf.outputs.app }}"
+        IMAGE="${ACR}/${IMAGE_NAME}:${TAG}"
 
-    - name: Get URL
+        echo "Deploying image: $IMAGE"
+        echo "Resource Group: $RG"
+        echo "Container App: $APP_NAME"
+
+        az containerapp update \
+          --name "$APP_NAME" \
+          --resource-group "$RG" \
+          --image "$IMAGE"
+
+    - name: Summary
       run: |
-        FQDN=$(az container show \
-          --resource-group ${{ secrets.RESOURCE_GROUP_DEV }} \
-          --name ${{ secrets.DEV_CONTAINER_NAME }} \
-          --query ipAddress.fqdn \
-          --output tsv)
-        
-        IP=$(az container show \
-          --resource-group ${{ secrets.RESOURCE_GROUP_DEV }} \
-          --name ${{ secrets.DEV_CONTAINER_NAME }} \
-          --query ipAddress.ip \
-          --output tsv)
-        
-        echo "### ✅ Deployed to DEV!" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Environment:** DEV" >> $GITHUB_STEP_SUMMARY
-        echo "**Image:** \`${{ inputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "**FQDN:** http://${FQDN}:8080" >> $GITHUB_STEP_SUMMARY
-        echo "**IP:** http://${IP}:8080" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Test URLs:**" >> $GITHUB_STEP_SUMMARY
-        echo "- http://${IP}:8080/" >> $GITHUB_STEP_SUMMARY
-        echo "- http://${IP}:8080/health" >> $GITHUB_STEP_SUMMARY
-        echo "- http://${IP}:8080/info" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ env.IMAGE_NAME }}:${{ github.event.inputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
